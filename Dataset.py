@@ -1,4 +1,5 @@
 from copy import deepcopy
+import numpy as np
 
 
 """
@@ -9,6 +10,7 @@ class WordDataset:
     words = {}
 
     def __init__(self):
+        self.words = {}
         pass
 
     def read_file(self, file_path: str):
@@ -29,12 +31,13 @@ class WordDataset:
 
 class InputDataset:
 
-    docs : list[list[int]] = []
+    docs : list[list[int]]
 
     def __init__(self):
+        self.docs = []
         pass
 
-    def read_file(self, input_file_path) -> str:
+    def read_file(self, input_file_path, wds: WordDataset):
         """
             given path to the file of the text input, reads and loads the data
         """
@@ -48,24 +51,28 @@ class InputDataset:
                 elems = input.split()
                 idx = int(elems[0])
                 word = int(elems[1])
-                while(prev_idx <= idx):
-                    self.docs.append([])
+                while(prev_idx < idx):
+                    self.docs.append([0] * len(wds.words))
                     prev_idx += 1
 
-                self.docs[idx - 1].append(word)
+                self.docs[idx - 1][word] = 1
                 input = f.readline()
 
                 
 
-    def get_vals(self) -> list[list[int]]:
-        return deepcopy(self.docs)
+    def get_vals(self) -> list[np.ndarray]:
+        n = deepcopy(self.docs)
+        for idx in range(len(n)):
+            n[idx] = np.array(n[idx])
+        return n
     
 
 class TargetDataset:
 
-    labels : list[int] = []
+    labels : list[int]
 
     def __init__(self):
+        self.labels = []
         pass
 
     def read_file(self, target_file_path) -> str:

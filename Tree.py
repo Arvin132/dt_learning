@@ -3,6 +3,7 @@ from copy import deepcopy
 import math
 import numpy as np
 from Dataset import WordDataset
+from tqdm import tqdm
 
 
 class PriorityQueue:
@@ -11,7 +12,7 @@ class PriorityQueue:
         self._index = 0
 
     def push(self, item, priority):
-        heapq.heappush(self._queue, (priority, self._index, item))
+        heapq.heappush(self._queue, (-priority, self._index, item))
         self._index += 1
 
     def pop(self):
@@ -19,21 +20,26 @@ class PriorityQueue:
     
     def is_empty(self) -> bool:
         return (len(self._queue) == 0)
-       
+
+def entropy(p: int):
+    if (p == 0):
+        return 0
+    return -1 * p * math.log2(p)
+
 def information_gain(y: np.ndarray[int]) -> float:
-    zeros = 0; ones = 0
+    class_1 = 0; class_2 = 0
 
     for val in y:
-        if (val == 0):
-            zeros += 1
+        if (val == 1):
+            class_1 += 1
         else:
-            ones += 1
-    p0 = zeros / len(y)
-    p1 = ones / len(y)
+            class_2 += 1
+    p0 = class_1 / len(y)
+    p1 = class_2 / len(y)
 
-    return -1 * (p0 * math.log2(p0) + p1 * math.log2(p1))
+    return entropy(p0) + entropy(p1)
 
-def split_data(inputs: np.ndarray, targets: np.ndarray, given: int) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+def split_data(inputs: list[np.ndarray], targets: np.ndarray, given: int) -> tuple[list, list, list, list]:
     """
         given inputs and targets, split the data in which the inputs contain the given int
 
@@ -44,59 +50,76 @@ def split_data(inputs: np.ndarray, targets: np.ndarray, given: int) -> tuple[np.
     inputs_2 = []; targets_2 = []
     
     for idx in range(len(inputs)):
-        if (np.isin(given, inputs[idx])):
-            mask = inputs[idx] != given
-            inputs_1.append(inputs[idx][mask])
+        if (inputs[idx][given] == 1):
+            n = deepcopy(inputs[idx])
+            n[given] = -1
+            inputs_1.append(n)
             targets_1.append(targets[idx])
         else:
+            n = deepcopy(inputs[idx])
+            n[given] = -1
             inputs_2.append(inputs[idx])
             targets_2.append(targets[idx])
 
 
-    return np.array(inputs_1), np.array(targets_1), np.array(inputs_2), np.array(targets_2)
+    return inputs_1, targets_1, inputs_2, targets_2
 
-def information_gain_by_split(inputs: np.ndarray, targets: np.ndarray, given: int) -> float:
-    zeros_have = 0; ones_have = 0
-    zeros_no = 0; ones_no = 0
-
+def information_gain_by_split(inputs: list[np.ndarray], targets: list[int], given: int) -> float:
+    if (inputs[0][given] == -1):
+        return -1.0
+    class_1_have = 0; class_2_have = 0
+    class_1_no = 0; class_2_no = 0
+    total_len = len(targets)
     for idx in range(len(inputs)):
-        if (np.isin(given, inputs[idx])):
-            if (targets[idx] == 0):
-                zeros_have += 1
+
+        if (inputs[idx][given] == 1):
+            if (targets[idx] == 1):
+                class_1_have += 1
             else:
-                ones_have += 1
+                class_2_have += 1
         else:
-            if (targets[idx] == 0):
-                zeros_no += 1
+            if (targets[idx] == 1):
+                class_1_no += 1
             else:
-                ones_no += 1
+                class_2_no += 1
 
     E = information_gain(targets)
-    p0_have = zeros_have / (zeros_have + ones_have)
-    p1_have = ones_have / (zeros_have + ones_have)
-    p0_no = zeros_no / (zeros_no + ones_no)
-    p1_no = ones_no / (zeros_no + ones_no)
-    E_split = ((zeros_have + ones_have) / len(targets)) * (-1 * (p0_have * math.log2(p0_have) + p1_have * math.log2(p1_have))) \
-             + ((zeros_no + ones_no) / len(targets)) * (-1 * (p0_no * math.log2(p0_no) + p1_no * math.log2(p1_no)))
+    have_denom = 0
+    if (class_1_have + class_2_have != 0):
+        have_denom = (1 / (class_1_have + class_2_have))
+    p0_have = class_1_have * have_denom
+    p1_have = class_2_have * have_denom
+
+    no_denom = 0
+    if (class_1_no + class_2_no != 0):
+        no_denom = 1 / (class_1_no + class_2_no)
+    p0_no = class_1_no * no_denom
+    p1_no = class_2_no * no_denom
+
+    E_split = ((class_1_have + class_2_have) / total_len) * (entropy(p0_have) + entropy(p1_have)) \
+             + ((class_1_no + class_2_no) / total_len) * (entropy(p0_no) + entropy(p1_no))
 
     return E - E_split 
 
 class TreeNode:
-    children: list = [] # list of TreeEdges 
+    children: list # list of TreeEdges 
     feature = 0         # feature to do the split on
     ig_val = 0          # information gain value
-    inputs : np.ndarray[np.ndarray[int]]
-    targets : np.ndarray[int]
+    inputs : list[np.ndarray[int]]
+    targets : list[int]
     prediction = -1
+    depth: int
 
-    def __init__(self, inputs, targets) -> None:
+    def __init__(self, inputs, targets, depth) -> None:
         self.inputs = inputs
         self.targets = targets
+        self.children = []
+        self.depth = depth
     
     def add_child(self, child):
         self.children.append(child)
 
-    def find_optimal_split(self) -> tuple[int, float]:
+    def find_optimal_split(self, feature_range) -> tuple[int, float]:
         """
             finds the optimal feature to do the split, and then stores that in feature and the score
             on ig_val fields of itself
@@ -105,10 +128,7 @@ class TreeNode:
                 feature, split_score
         """
 
-        words = set()
-        for word in self.inputs.flatten():
-            words.add(word)
-
+        words = range(feature_range)
         
         self.feature = words[0]
         self.ig_val = information_gain_by_split(self.inputs, self.targets, words[0])
@@ -127,23 +147,33 @@ class TreeNode:
         # if internal node
         if (len(self.children) != 0):
             for child in self.children:
-                if(np.isin(given_input, self.feature) == child.val):
+                if(given_input[self.feature]== child.val):
                     return child.dest.predict(given_input)
                 
         #if leaf node        
         if (self.prediction == -1):
-            p = np.count_nonzero(self.targets) / len(self.targets)
+            p = self.targets.count(1) / len(self.targets)
             if (p >= 0.5):
                 self.prediction = 1
             else:
-                self.prediction = 0
+                self.prediction = 2
         return self.prediction
+    
+    def get_depth(self) -> int:
+        depth = 1
+        for child in self.children:
+            depth = max(depth, 1 + child.dest.get_depth())
+
+        return depth
+    
+    def printout(self, max_depth, wds: WordDataset):
+        return
 
 
   
 class TreeEdge:
     dest: TreeNode = None
-    val: bool = False
+    val = 0
 
     def __init__(self, dest, val) -> None:
         self.dest = dest
@@ -158,36 +188,45 @@ class DesicionTree:
     def __init__(self, max_size=100):
         self.max_size=max_size
 
-    def fit(self, inputs: np.ndarray[np.ndarray[int]], targets: np.ndarray[int], words: WordDataset):
+    def fit(self, inputs: list[np.ndarray[int]], targets: list[int], words: WordDataset):
         if (self.root != None):
             raise RuntimeError(" supposed to use fit method only once after object init")
         
-        self.root = TreeNode(deepcopy(inputs), deepcopy(targets))
-        self.depth = 1
-        feature, split_val = self.root.find_optimal_split()
+        self.root = TreeNode(deepcopy(inputs), deepcopy(targets), 1)
+        feature, split_val = self.root.find_optimal_split(len(words.words))
         self.heap.push(self.root, split_val)
 
+        progress_bar = tqdm(total=self.max_size, desc="Processed Nodes")
         while(self.heap.is_empty() == False and self.size <= self.max_size):
             node: TreeNode = self.heap.pop()
             # create the new nodes
             x_left, y_left, x_right, y_right = split_data(node.inputs, node.targets, node.feature)
-            left_node = TreeNode(x_left, y_left)
-            right_node = TreeNode(x_right, y_right)
+            left_node = TreeNode(x_left, y_left, node.depth + 1)
+            right_node = TreeNode(x_right, y_right, node.depth + 1)
             # push the new nodes into the heap
-            l_f, l_val = left_node.find_optimal_split()
-            r_f, r_val = right_node.find_optimal_split()
+            l_f, l_val = left_node.find_optimal_split(len(words.words))
+            r_f, r_val = right_node.find_optimal_split(len(words.words))
             self.heap.push(left_node, l_val)
             self.heap.push(right_node, r_val)
             # add new nodes as children
-            left_branch = TreeEdge(left_node, False)
-            right_branch = TreeEdge(right_node, True)
+            left_branch = TreeEdge(left_node, 0)
+            right_branch = TreeEdge(right_node, 1)
+
             node.add_child(left_branch)
             node.add_child(right_branch)
+            progress_bar.update(1)
+
             # increase size
-            self.size += 2
+            self.size += 1
+        
+        progress_bar.close()
             
-    def predict(self, inputs: np.ndarray[np.ndarray[int]]) -> list[int]:
+    def predict(self, inputs: list[np.ndarray[int]]) -> list[int]:
         return self(inputs)
 
-    def __call__(self, inputs: np.ndarray[np.ndarray[int]]) -> list[int]:
+    def __call__(self, inputs: list[np.ndarray[int]]) -> list[int]:
         return [self.root.predict(x) for x in inputs]
+    
+    def get_printout(self, wds: WordDataset):
+        self.root.printout(self.root.get_depth())
+
